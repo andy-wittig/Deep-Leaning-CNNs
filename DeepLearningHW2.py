@@ -92,20 +92,163 @@ show_batch(train_dl)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
-#--------------------
+#-------------------- Problem 1
 
 class CNN(nn.Module):
     def __init__(self):
         super(CNN, self).__init__()
 
-        #Convolutional layer with 4 filters of size 3x3.
-        self.conv_layer = nn.Conv2d(in_channels = 1, out_channels = 4, kernel_size = 3)
-        #Max Pooling layer with size 2x2.
-        self.pool_layer = nn.MaxPool2d(kernel_size = 2)
-        self.relu = nn.ReLU()
+        self.in_size = 1
+        self.out_size = 4
+        self.kernel_conv = 3
+        self.k_pool = 2
         #Images are 28x28, kernals are 3x3x4, therefore the input to pooling layer is (28-3)/1 + 1 = 26.
         #Pooling divides by 2, so the input to fully connected layer is 13x13x4.
-        self.fully_connected_layer = nn.Linear(in_features = 4 * 13 * 13, out_features = 10) #10 digits possible
+        self.in_fc = 4 * 13 * 13
+        self.out_fc = 10 #10 digits possible
 
-    def forward(self):
-        #forward processing
+        #Convolutional layer with 4 filters of size 3x3.
+        self.conv_layer = nn.Conv2d(in_channels = self.in_size, out_channels = self.out_size, kernel_size = self.kernel_conv)
+        #Max Pooling layer with size 2x2.
+        self.pool_layer = nn.MaxPool2d(kernel_size = self.k_pool)
+        self.relu = nn.ReLU()
+        self.fully_connected_layer = nn.Linear(in_features = self.in_fc, out_features = self.out_fc)
+
+    def forward(self, output):
+        output = self.conv_layer(output)
+        output = self.pool_layer(output)
+        output = self.relu(output)
+        output = output.view(-1, self.in_fc)
+        output = self.fully_connected_layer(output)
+        return output
+
+#-------------------- Problem 2
+model = CNN().to(device)
+summary(model, (1, 28, 28))
+#There are 6,810 parameters total
+
+#------------------- Training
+
+# Loss function and optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr = 0.001)
+
+# Early stopping parameters
+early_stopping_patience = 5
+
+# Define the number of epochs to train for
+epochs = 20
+
+# Using validation loss as metric
+best_val_loss = float('inf')
+best_epoch = 0
+early_stopping_counter = 0
+
+# Save metrics at each epoch for plotting
+epoch_train_loss_values = []
+epoch_val_loss_values = []
+epoch_train_acc_values = []
+epoch_val_acc_values = []
+
+for epoch in range(epochs):
+    model.train()  # Set model to training mode
+
+    train_losses, train_accuracies = [], []
+
+    for data, label in train_dl:
+        data, label = data.to(device), label.to(device)  # Move data to the same device as the model
+
+        optimizer.zero_grad()  # Clear previous epoch's gradients
+        output = model(data)  # Forward pass
+        loss = criterion(output, label)  # Compute loss
+        loss.backward()  # Backward pass
+        optimizer.step()  # Update weights
+
+        # Accumulate metrics
+        acc = (output.argmax(dim = 1) == label).float().mean().item()
+        train_losses.append(loss.item())
+        train_accuracies.append(acc)
+
+    # Average metrics across all training steps
+    epoch_train_loss = sum(train_losses) / len(train_losses)
+    epoch_train_accuracy = sum(train_accuracies) / len(train_accuracies)
+
+    # Save current epochs training metrics
+    epoch_train_loss_values.append(epoch_train_loss)
+    epoch_train_acc_values.append(epoch_train_accuracy)
+
+    # Validation
+    model.eval()  # Set model to evaluation mode
+    val_losses, val_accuracies = [], []
+    with torch.no_grad():  # Disable gradient calculation
+        for data, label in val_dl:
+            data, label = data.to(device), label.to(device)
+
+            val_output = model(data)
+            val_loss = criterion(val_output, label)
+
+            # Accumulate metrics
+            acc = (val_output.argmax(dim = 1) == label).float().mean().item()
+            val_losses.append(val_loss.item())
+            val_accuracies.append(acc)
+
+    # Average metrics across all validation steps
+    epoch_val_loss = sum(val_losses) / len(val_losses)
+    epoch_val_accuracy = sum(val_accuracies) / len(val_accuracies)
+
+    # Save current epochs validation metrics
+    epoch_val_loss_values.append(epoch_val_loss)
+    epoch_val_acc_values.append(epoch_val_accuracy)
+
+    # Update best model if validation accuracy improves
+    if epoch_val_loss < best_val_loss:
+        torch.save(model.state_dict(), 'best_model.pth')
+
+        best_val_loss = epoch_val_loss
+        best_epoch = epoch + 1
+        early_stopping_counter = 0
+
+    else:
+        early_stopping_counter += 1
+
+    print(f'Epoch: {epoch + 1}\n'
+          f'Train Acc: {epoch_train_accuracy:.3f}, Val Acc: {epoch_val_accuracy:.3f} '
+          f'Train Loss: {epoch_train_loss:.3f}, Val Loss: {epoch_val_loss:.3f}')
+    print(f'Best Metric: {best_val_loss:.3f} at epoch: {best_epoch}\n')
+
+    if early_stopping_counter >= early_stopping_patience:
+        print(f"Early stopping after {early_stopping_patience} epochs of no improvement.")
+        break
+
+
+# Plot results
+plt.figure(figsize = (12, 6))
+
+# Plot loss
+plt.subplot(1, 2, 1)
+plt.title("Loss")
+x_train = [i + 1 for i in range(len(epoch_train_loss_values))]
+y_train = epoch_train_loss_values
+x_val = [i + 1 for i in range(len(epoch_val_loss_values))]
+y_val = epoch_val_loss_values
+plt.plot(x_train, y_train, label='Train Loss')
+plt.plot(x_val, y_val, label='Val Loss', linestyle='--')
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.legend()
+
+# Plot accuracy
+plt.subplot(1, 2, 2)
+plt.title("Accuracy")
+x_train_acc = [i + 1 for i in range(len(epoch_train_acc_values))]
+y_train_acc = epoch_train_acc_values
+x_val_acc = [i + 1 for i in range(len(epoch_val_acc_values))]
+y_val_acc = epoch_val_acc_values
+plt.plot(x_train_acc, y_train_acc, label='Train Acc')
+plt.plot(x_val_acc, y_val_acc, label='Val Acc', linestyle='--')
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.legend()
+
+plt.tight_layout()
+plt.show()
